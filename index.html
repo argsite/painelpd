@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Monitoramento do Pé Diabético</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Painel de Avaliação do Pé Diabético</h1>
+            <p class="text-gray-600">Carregue o relatório em Excel para visualizar métricas e gráficos comparativos.</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 mb-8">
+            <input type="file" id="upload" accept=".xls,.xlsx" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 transition cursor-pointer">
+        </div>
+
+        <div id="dashboard" class="hidden space-y-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div class="bg-blue-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 class="text-blue-100 uppercase text-xs font-bold tracking-wider">Total Pacientes</h3>
+                    <p id="totalPacientes" class="text-4xl font-bold mt-2">0</p>
+                </div>
+                <div class="bg-green-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 class="text-green-100 uppercase text-xs font-bold tracking-wider">Avaliados (S)</h3>
+                    <p id="totalAvaliados" class="text-4xl font-bold mt-2">0</p>
+                </div>
+                <div class="bg-amber-500 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 class="text-amber-100 uppercase text-xs font-bold tracking-wider">Pendentes (N)</h3>
+                    <p id="totalPendentes" class="text-4xl font-bold mt-2">0</p>
+                </div>
+                <div class="bg-purple-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 class="text-purple-100 uppercase text-xs font-bold tracking-wider">Adesão Geral</h3>
+                    <p id="porcentagem" class="text-4xl font-bold mt-2">0%</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4">Comparativo Faixa Etária (Total vs. Avaliados)</h2>
+                    <canvas id="chartIdade"></canvas>
+                </div>
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4">Distribuição de Avaliados por Microárea</h2>
+                    <canvas id="chartMicro"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Lista Nominal (Avaliados)</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="text-gray-400 border-b border-gray-200 uppercase text-xs tracking-wider">
+                                <th class="pb-3 font-bold">Nome Completo</th>
+                                <th class="pb-3 font-bold">Data Nasc.</th>
+                                <th class="pb-3 font-bold">Idade</th>
+                                <th class="pb-3 font-bold">Endereço</th>
+                            </tr>
+                        </thead>
+                        <tbody id="listaPacientes" class="text-sm"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chartIdade, chartMicro;
+
+        document.getElementById('upload').addEventListener('change', function(e) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                processData(XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]));
+            };
+            reader.readAsArrayBuffer(e.target.files[0]);
+        });
+
+        function processData(data) {
+            const avaliados = data.filter(r => r["Avaliação dos pés"]?.toString().trim().toUpperCase() === 'S');
+            
+            document.getElementById('totalPacientes').innerText = data.length;
+            document.getElementById('totalAvaliados').innerText = avaliados.length;
+            document.getElementById('totalPendentes').innerText = data.length - avaliados.length;
+            document.getElementById('porcentagem').innerText = data.length > 0 ? Math.round((avaliados.length / data.length) * 100) + '%' : '0%';
+
+            const faixasLabels = ["0-30", "31-50", "51-70", "71+"];
+            const totalIdade = { "0-30": 0, "31-50": 0, "51-70": 0, "71+": 0 };
+            const avaliadosIdade = { "0-30": 0, "31-50": 0, "51-70": 0, "71+": 0 };
+
+            data.forEach(r => {
+                const i = parseInt(r["Idade"] || 0);
+                const faixa = i <= 30 ? "0-30" : i <= 50 ? "31-50" : i <= 70 ? "51-70" : "71+";
+                totalIdade[faixa]++;
+                if(r["Avaliação dos pés"]?.toString().trim().toUpperCase() === 'S') avaliadosIdade[faixa]++;
+            });
+
+            // Agrupamento por Microárea (APENAS AVALIADOS)
+            const microsAvaliados = {};
+            avaliados.forEach(r => {
+                const m = r["Microárea"] || "N/A";
+                microsAvaliados[m] = (microsAvaliados[m] || 0) + 1;
+            });
+
+            renderCharts(faixasLabels, totalIdade, avaliadosIdade, microsAvaliados);
+            
+            const tbody = document.getElementById('listaPacientes');
+            tbody.innerHTML = avaliados.map(r => `
+                <tr class="border-b border-gray-50">
+                    <td class="py-4 text-gray-800">${r["Nome Completo"] || '-'}</td>
+                    <td class="py-4 text-gray-600">${r["Data Nascimento"] || '-'}</td>
+                    <td class="py-4 text-gray-600">${r["Idade"] || '-'}</td>
+                    <td class="py-4 text-gray-600">${r["Endereço"] || '-'}</td>
+                </tr>
+            `).join('');
+
+            document.getElementById('dashboard').classList.remove('hidden');
+        }
+
+        function renderCharts(labels, totalIdade, avaliadosIdade, microsAvaliados) {
+            if(chartIdade) chartIdade.destroy();
+            if(chartMicro) chartMicro.destroy();
+
+            chartIdade = new Chart(document.getElementById('chartIdade'), {
+                type: 'bar',
+                data: { 
+                    labels: labels, 
+                    datasets: [
+                        { label: 'Total Pacientes', data: Object.values(totalIdade), backgroundColor: '#94a3b8' },
+                        { label: 'Avaliados', data: Object.values(avaliadosIdade), backgroundColor: '#22c55e' }
+                    ] 
+                }
+            });
+
+            chartMicro = new Chart(document.getElementById('chartMicro'), {
+                type: 'pie',
+                data: { 
+                    labels: Object.keys(microsAvaliados), 
+                    datasets: [{ 
+                        data: Object.values(microsAvaliados),
+                        backgroundColor: ['#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#f472b6']
+                    }] 
+                },
+                options: {
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    let value = context.parsed;
+                                    let total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    let percentage = Math.round((value / total) * 100);
+                                    return `${label}: ${value} pacientes (${percentage}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
