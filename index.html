@@ -15,7 +15,7 @@
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-gray-800">Dashboard - Avaliação de Pé Diabético</h1>
-                <p class="text-sm text-gray-500">Exibindo apenas pacientes com Avaliação dos Pés realizada (Sim)</p>
+                <p class="text-sm text-gray-500">Filtrado para pacientes com Avaliação dos Pés realizada (Sim)</p>
             </div>
             <div>
                 <label class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-xl cursor-pointer shadow-sm transition inline-flex items-center gap-2">
@@ -68,6 +68,7 @@
                 <table class="w-full text-left border-collapse">
                     <thead class="bg-gray-50 text-gray-500 uppercase text-xs sticky top-0">
                         <tr>
+                            <th class="p-4 font-semibold w-16">Nº</th>
                             <th class="p-4 font-semibold">Nome Completo</th>
                             <th class="p-4 font-semibold">Idade</th>
                             <th class="p-4 font-semibold">Microárea</th>
@@ -76,7 +77,7 @@
                     </thead>
                     <tbody id="tabelaCorpo" class="divide-y divide-gray-100 text-sm text-gray-700">
                         <tr>
-                            <td colspan="4" class="p-8 text-center text-gray-400">Carregue uma planilha para exibir os dados</td>
+                            <td colspan="5" class="p-8 text-center text-gray-400">Carregue uma planilha para exibir os dados</td>
                         </tr>
                     </tbody>
                 </table>
@@ -107,7 +108,7 @@
         function processData(data) {
             if (!data || data.length === 0) return;
 
-            // Filtro rígido para pegar apenas quem tem 'S' na coluna 'Avaliação dos pés'
+            // Filtrar apenas quem tem 'S' na coluna 'Avaliação dos pés'
             const filteredData = data.filter(row => {
                 const aval = row['Avaliação dos pés'] ? String(row['Avaliação dos pés']).trim().toUpperCase() : '';
                 return aval === 'S';
@@ -121,7 +122,7 @@
             let tabelaHTML = '';
 
             if (total === 0) {
-                document.getElementById('tabelaCorpo').innerHTML = '<tr><td colspan="4" class="p-8 text-center text-red-400">Nenhum paciente encontrado com "S" na coluna "Avaliação dos pés".</td></tr>';
+                document.getElementById('tabelaCorpo').innerHTML = '<tr><td colspan="5" class="p-8 text-center text-red-400">Nenhum paciente encontrado com "S" na coluna "Avaliação dos pés".</td></tr>';
                 document.getElementById('totalPacientes').innerText = '0';
                 document.getElementById('mediaIdade').innerText = '0 anos';
                 document.getElementById('totalMicroareas').innerText = '0';
@@ -129,7 +130,7 @@
                 return;
             }
 
-            filteredData.forEach(row => {
+            filteredData.forEach((row, index) => {
                 const nome = row['Nome Completo'] || row['Nome'] || 'Não informado';
                 const idade = parseInt(row['Idade']) || 0;
                 const endereco = row['Endereço'] || 'Não informado';
@@ -147,6 +148,7 @@
 
                 tabelaHTML += `
                     <tr class="hover:bg-gray-50 transition">
+                        <td class="p-4 font-bold text-gray-400">${index + 1}</td>
                         <td class="p-4 font-medium text-gray-800">${nome}</td>
                         <td class="p-4 text-gray-600">${idade} anos</td>
                         <td class="p-4 text-gray-600">${microarea}</td>
