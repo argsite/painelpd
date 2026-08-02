@@ -35,7 +35,7 @@
                 <h3 id="totalAvaliados" class="text-3xl font-extrabold text-blue-600 mt-2">0</h3>
             </div>
             <div class="bg-blue-600 p-6 rounded-2xl shadow-sm text-white text-center flex flex-col justify-center items-center">
-                <span class="text-4xl mb-2">🦶</span>
+                <span class="text-5xl mb-2">🦶</span>
                 <span class="text-xs font-semibold uppercase tracking-wider">Cobertura</span>
                 <span id="txtPorcentagem" class="text-3xl font-bold mt-1">0%</span>
             </div>
@@ -47,13 +47,13 @@
 
         <!-- Charts -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100" style="height: 350px;">
                 <h2 class="text-lg font-bold mb-4">Total por Faixa Etária</h2>
-                <div class="h-64"><canvas id="chartIdade"></canvas></div>
+                <canvas id="chartIdade"></canvas>
             </div>
-            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100" style="height: 350px;">
                 <h2 class="text-lg font-bold mb-4">Distribuição por Microárea</h2>
-                <div class="h-64"><canvas id="chartMicro"></canvas></div>
+                <canvas id="chartMicro"></canvas>
             </div>
         </div>
 
@@ -65,7 +65,7 @@
                     <thead class="bg-gray-50">
                         <tr class="border-b"><th class="p-4">Nº</th><th class="p-4">Data Atend.</th><th class="p-4">Nome</th><th class="p-4">Idade</th></tr>
                     </thead>
-                    <tbody></tbody>
+                    <tbody id="corpoTabela"></tbody>
                 </table>
             </div>
         </div>
@@ -78,11 +78,13 @@
 
         function normalizar(texto) { return String(texto || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
         
-        function formatarDataExcel(serial) {
-            if (typeof serial !== 'number') return serial;
-            const utc_days = Math.floor(serial - 25569);
-            const date = new Date(utc_days * 86400 * 1000);
-            return date.toLocaleDateString('pt-BR');
+        function formatarDataExcel(val) {
+            if (!val) return null;
+            if (typeof val === 'number') {
+                return new Date((val - 25569) * 86400 * 1000);
+            }
+            const parts = val.split('/');
+            return parts.length === 3 ? new Date(parts[2], parts[1]-1, parts[0]) : null;
         }
 
         function lerArquivo(file, callback) {
@@ -98,35 +100,53 @@
         document.getElementById('filePacientes').addEventListener('change', (e) => lerArquivo(e.target.files[0], (j) => { dataPacientes = j; processar(); }));
         document.getElementById('fileDatas').addEventListener('change', (e) => lerArquivo(e.target.files[0], (j) => { dataHistorico = j; processar(); }));
 
+        function renderChart(id, type, labels, data, label, colors) {
+            if (charts[id]) charts[id].destroy();
+            charts[id] = new Chart(document.getElementById(id).getContext('2d'), {
+                type: type,
+                data: { labels, datasets: [{ label, data, backgroundColor: colors }] },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+
         function processar() {
             if (dataPacientes.length === 0) return;
             const avaliados = dataPacientes.filter(p => normalizar(p["Avaliação dos pés"]) === 'S');
             
             avaliados.forEach(p => {
                 const nome = normalizar(p["Nome Completo"]);
-                const reg = dataHistorico.find(h => normalizar(h["Paciente"] || h["Nome"]) === nome);
-                p.dataAtendimento = reg ? formatarDataExcel(reg["Data do Atendimento"]) : "Não encontrada";
+                const reg = dataHistorico.find(h => normalizar(h["Paciente"] || h["Nome"] || "") === nome);
+                p.dataObj = reg ? formatarDataExcel(reg["Data do Atendimento"]) : null;
             });
 
-            // Ordenação Crescente por data
-            avaliados.sort((a, b) => {
-                const d1 = a.dataAtendimento.split('/').reverse().join('-');
-                const d2 = b.dataAtendimento.split('/').reverse().join('-');
-                return new Date(d1) - new Date(d2);
-            });
+            avaliados.sort((a, b) => (a.dataObj || 0) - (b.dataObj || 0));
 
             document.getElementById('totalPacientes').innerText = dataPacientes.length;
             document.getElementById('totalAvaliados').innerText = avaliados.length;
             document.getElementById('totalFaltantes').innerText = dataPacientes.length - avaliados.length;
             document.getElementById('txtPorcentagem').innerText = ((avaliados.length / dataPacientes.length) * 100).toFixed(1) + '%';
 
-            const tbody = document.querySelector('#tabelaPacientes tbody');
+            const tbody = document.getElementById('corpoTabela');
             tbody.innerHTML = avaliados.map((p, i) => `<tr class="border-b">
                 <td class="p-4">${i+1}</td>
-                <td class="p-4">${p.dataAtendimento}</td>
+                <td class="p-4">${p.dataObj ? p.dataObj.toLocaleDateString('pt-BR') : "Não encontrada"}</td>
                 <td class="p-4">${p["Nome Completo"]}</td>
                 <td class="p-4">${p["Idade"]}</td>
             </tr>`).join('');
+
+            const faixas = { "0-20": 0, "21-40": 0, "41-60": 0, "60+": 0 };
+            avaliados.forEach(p => {
+                const i = parseInt(p["Idade"]) || 0;
+                if (i <= 20) faixas["0-20"]++; else if (i <= 40) faixas["21-40"]++; else if (i <= 60) faixas["41-60"]++; else faixas["60+"]++;
+            });
+            renderChart('chartIdade', 'bar', Object.keys(faixas), Object.values(faixas), 'Pacientes', '#ef4444');
+
+            const microMap = {};
+            avaliados.forEach(p => {
+                const m = p["Microárea"] || "Indefinida";
+                microMap[m] = (microMap[m] || 0) + 1;
+            });
+            renderChart('chartMicro', 'pie', Object.keys(microMap), Object.values(microMap), 'Pacientes', ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']);
         }
     </script>
 </body>
