@@ -11,18 +11,23 @@
 <body class="bg-gray-50 min-h-screen p-6 font-sans">
     <div class="max-w-7xl mx-auto space-y-6">
         <h1 class="text-3xl font-bold text-gray-800">Painel de Monitoramento: Pé Diabético</h1>
-        
+
         <!-- Upload Section -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <div>
                 <label class="block mb-2 font-semibold text-gray-700">1. Upload: Relatório de Pacientes:</label>
                 <input type="file" id="filePacientes" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
+                <p class="text-xs text-gray-400 mt-1">Arquivo com colunas "Nome Completo", "Avaliação dos pés", "Idade", "Microárea"</p>
             </div>
             <div>
                 <label class="block mb-2 font-semibold text-gray-700">2. Upload: Histórico de Datas:</label>
                 <input type="file" id="fileDatas" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
+                <p class="text-xs text-gray-400 mt-1">Arquivo com colunas "Paciente", "Data do Atendimento"</p>
             </div>
         </div>
+
+        <!-- Status / avisos -->
+        <div id="statusBox" class="hidden bg-amber-50 border border-amber-200 text-amber-800 text-sm p-4 rounded-2xl"></div>
 
         <!-- Metric Cards -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -49,11 +54,15 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100" style="height: 350px;">
                 <h2 class="text-lg font-bold mb-4">Total por Faixa Etária</h2>
-                <canvas id="chartIdade"></canvas>
+                <div style="position: relative; height: 260px;">
+                    <canvas id="chartIdade"></canvas>
+                </div>
             </div>
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100" style="height: 350px;">
                 <h2 class="text-lg font-bold mb-4">Distribuição por Microárea</h2>
-                <canvas id="chartMicro"></canvas>
+                <div style="position: relative; height: 260px;">
+                    <canvas id="chartMicro"></canvas>
+                </div>
             </div>
         </div>
 
@@ -72,33 +81,148 @@
     </div>
 
     <script>
+        // dataPacientes = linhas com Nome Completo / Avaliação dos pés / Idade / Microárea
+        // dataHistorico = linhas com Paciente / Data do Atendimento
         let dataPacientes = [];
         let dataHistorico = [];
         let charts = {};
 
-        function normalizar(texto) { return String(texto || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
-        
-        function formatarDataExcel(val) {
-            if (!val) return null;
-            if (typeof val === 'number') {
-                return new Date((val - 25569) * 86400 * 1000);
-            }
-            const parts = val.split('/');
-            return parts.length === 3 ? new Date(parts[2], parts[1]-1, parts[0]) : null;
+        function normalizar(texto) {
+            return String(texto || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         }
 
+        // Recebe Date, número serial do Excel ou texto "dd/mm/aaaa" e devolve sempre
+        // um objeto Date "seguro" (meio-dia UTC) para não sofrer o problema de
+        // fuso horário que fazia a data aparecer um dia antes no Brasil.
+        function formatarDataExcel(val) {
+            if (val === null || val === undefined || val === "") return null;
+
+            if (val instanceof Date && !isNaN(val)) {
+                return new Date(Date.UTC(val.getUTCFullYear(), val.getUTCMonth(), val.getUTCDate(), 12));
+            }
+            if (typeof val === 'number') {
+                // Data serial do Excel (dias desde 30/12/1899)
+                const utcDias = Math.round((val - 25569));
+                return new Date(utcDias * 86400 * 1000 + 12 * 3600 * 1000);
+            }
+            if (typeof val === 'string') {
+                const partes = val.trim().split('/');
+                if (partes.length === 3) {
+                    const [d, m, a] = partes.map(Number);
+                    if (d && m && a) return new Date(Date.UTC(a, m - 1, d, 12));
+                }
+            }
+            return null;
+        }
+
+        function formatarDataBR(dataObj) {
+            if (!dataObj) return "Não encontrada";
+            const dia = String(dataObj.getUTCDate()).padStart(2, '0');
+            const mes = String(dataObj.getUTCMonth() + 1).padStart(2, '0');
+            const ano = dataObj.getUTCFullYear();
+            return `${dia}/${mes}/${ano}`;
+        }
+
+        // Procura, dentro das primeiras linhas de uma matriz, qual delas é a linha
+        // de cabeçalho de verdade (algumas planilhas exportadas trazem um título
+        // ou linha em branco antes do cabeçalho real). Retorna -1 se não achar nada.
+        function encontrarLinhaCabecalho(matriz) {
+            const alvos = ["PACIENTE", "NOME", "ATENDIMENTO", "AVALIACAO", "MICROAREA", "IDADE"].map(normalizar);
+            for (let i = 0; i < Math.min(matriz.length, 15); i++) {
+                const linha = (matriz[i] || []).map(v => normalizar(v));
+                const bateu = linha.some(cel => alvos.some(alvo => cel && cel.includes(alvo)));
+                if (bateu) return i;
+            }
+            return -1;
+        }
+
+        // Varre TODAS as abas do arquivo (algumas exportações trazem uma aba de
+        // capa/filtros antes da aba com os dados de verdade) e devolve o json da
+        // primeira aba em que conseguir localizar uma linha de cabeçalho reconhecível.
         function lerArquivo(file, callback) {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const data = new Uint8Array(e.target.result);
-                const wb = XLSX.read(data, {type: 'array'});
-                callback(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]));
+                const wb = XLSX.read(data, { type: 'array', cellDates: true });
+
+                let melhorJson = [];
+                for (const nomeAba of wb.SheetNames) {
+                    const sheet = wb.Sheets[nomeAba];
+                    const matriz = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+                    const linhaCabecalho = encontrarLinhaCabecalho(matriz);
+                    if (linhaCabecalho === -1) continue;
+                    const json = XLSX.utils.sheet_to_json(sheet, { range: linhaCabecalho, defval: "" });
+                    if (json.length > 0) {
+                        melhorJson = json;
+                        break;
+                    }
+                }
+                // Fallback: se nenhuma aba teve um cabeçalho reconhecível pelas palavras-chave,
+                // usa a leitura padrão da primeira aba mesmo assim, só para conseguirmos
+                // mostrar ao usuário quais colunas o arquivo realmente tem.
+                if (melhorJson.length === 0 && wb.SheetNames.length > 0) {
+                    melhorJson = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+                }
+                callback(melhorJson);
             };
             reader.readAsArrayBuffer(file);
         }
 
-        document.getElementById('filePacientes').addEventListener('change', (e) => lerArquivo(e.target.files[0], (j) => { dataPacientes = j; processar(); }));
-        document.getElementById('fileDatas').addEventListener('change', (e) => lerArquivo(e.target.files[0], (j) => { dataHistorico = j; processar(); }));
+        // Detecta automaticamente se a planilha é a de "Pacientes" (tem colunas de
+        // nome/avaliação/idade/microárea) ou a de "Histórico de Datas" (tem colunas
+        // de paciente/data de atendimento), independente de qual dos dois campos de
+        // upload foi usado. Usa correspondência "contém" (não exata) para tolerar
+        // pequenas variações no nome das colunas (ex: "Data de Atendimento").
+        function detectarTipo(json) {
+            if (!json || json.length === 0) return { tipo: null, colunas: [] };
+            const colunasOriginais = Object.keys(json[0]);
+            const chaves = colunasOriginais.map(normalizar);
+
+            const temNomeCompleto = chaves.some(c => c.includes(normalizar("Nome Completo")));
+            const temAvaliacao = chaves.some(c => c.includes(normalizar("Avaliacao")) || c.includes(normalizar("pes")));
+            const temPaciente = chaves.some(c => c.includes(normalizar("Paciente")) && !c.includes(normalizar("Nome Completo")));
+            const temData = chaves.some(c => c.includes(normalizar("Atendimento")) || (c.includes(normalizar("Data")) && !c.includes(normalizar("Nascimento"))));
+
+            let tipo = null;
+            if (temNomeCompleto || temAvaliacao) tipo = "pacientes";
+            else if (temPaciente || temData) tipo = "historico";
+
+            return { tipo, colunas: colunasOriginais };
+        }
+
+        function mostrarStatus(msg) {
+            const box = document.getElementById('statusBox');
+            if (!msg) { box.classList.add('hidden'); box.innerText = ''; return; }
+            box.classList.remove('hidden');
+            box.innerText = msg;
+        }
+
+        function tratarUpload(file, origemEsperada) {
+            lerArquivo(file, (json) => {
+                const { tipo, colunas } = detectarTipo(json);
+                if (tipo === "pacientes") {
+                    dataPacientes = json;
+                } else if (tipo === "historico") {
+                    dataHistorico = json;
+                } else {
+                    mostrarStatus(`Não foi possível identificar o conteúdo do arquivo enviado em "${origemEsperada}". Colunas encontradas: ${colunas.join(", ") || "(nenhuma coluna detectada)"}.`);
+                    return;
+                }
+                if (tipo && tipo !== origemEsperada) {
+                    mostrarStatus(`O arquivo enviado no campo "${origemEsperada === 'pacientes' ? '1. Relatório de Pacientes' : '2. Histórico de Datas'}" foi identificado como ${tipo === 'pacientes' ? 'Relatório de Pacientes' : 'Histórico de Datas'} e foi carregado corretamente mesmo assim.`);
+                } else {
+                    mostrarStatus(null);
+                }
+                processar();
+            });
+        }
+
+        document.getElementById('filePacientes').addEventListener('change', (e) => {
+            if (e.target.files[0]) tratarUpload(e.target.files[0], 'pacientes');
+        });
+        document.getElementById('fileDatas').addEventListener('change', (e) => {
+            if (e.target.files[0]) tratarUpload(e.target.files[0], 'historico');
+        });
 
         function renderChart(id, type, labels, data, label, colors) {
             if (charts[id]) charts[id].destroy();
@@ -111,27 +235,36 @@
 
         function processar() {
             if (dataPacientes.length === 0) return;
+
             const avaliados = dataPacientes.filter(p => normalizar(p["Avaliação dos pés"]) === 'S');
-            
+
             avaliados.forEach(p => {
                 const nome = normalizar(p["Nome Completo"]);
                 const reg = dataHistorico.find(h => normalizar(h["Paciente"] || h["Nome"] || "") === nome);
                 p.dataObj = reg ? formatarDataExcel(reg["Data do Atendimento"]) : null;
             });
 
-            avaliados.sort((a, b) => (a.dataObj || 0) - (b.dataObj || 0));
+            // Ordena por data crescente; quem não tem data encontrada vai para o final
+            avaliados.sort((a, b) => {
+                if (!a.dataObj && !b.dataObj) return 0;
+                if (!a.dataObj) return 1;
+                if (!b.dataObj) return -1;
+                return a.dataObj - b.dataObj;
+            });
 
             document.getElementById('totalPacientes').innerText = dataPacientes.length;
             document.getElementById('totalAvaliados').innerText = avaliados.length;
             document.getElementById('totalFaltantes').innerText = dataPacientes.length - avaliados.length;
-            document.getElementById('txtPorcentagem').innerText = ((avaliados.length / dataPacientes.length) * 100).toFixed(1) + '%';
+            document.getElementById('txtPorcentagem').innerText = dataPacientes.length
+                ? ((avaliados.length / dataPacientes.length) * 100).toFixed(1) + '%'
+                : '0%';
 
             const tbody = document.getElementById('corpoTabela');
             tbody.innerHTML = avaliados.map((p, i) => `<tr class="border-b">
-                <td class="p-4">${i+1}</td>
-                <td class="p-4">${p.dataObj ? p.dataObj.toLocaleDateString('pt-BR') : "Não encontrada"}</td>
+                <td class="p-4">${i + 1}</td>
+                <td class="p-4">${formatarDataBR(p.dataObj)}</td>
                 <td class="p-4">${p["Nome Completo"]}</td>
-                <td class="p-4">${p["Idade"]}</td>
+                <td class="p-4">${p["Idade"] ?? "-"}</td>
             </tr>`).join('');
 
             const faixas = { "0-20": 0, "21-40": 0, "41-60": 0, "60+": 0 };
@@ -146,7 +279,8 @@
                 const m = p["Microárea"] || "Indefinida";
                 microMap[m] = (microMap[m] || 0) + 1;
             });
-            renderChart('chartMicro', 'pie', Object.keys(microMap), Object.values(microMap), 'Pacientes', ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']);
+            renderChart('chartMicro', 'pie', Object.keys(microMap), Object.values(microMap), 'Pacientes',
+                ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e']);
         }
     </script>
 </body>
